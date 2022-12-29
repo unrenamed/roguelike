@@ -1,5 +1,6 @@
 use rand::Rng;
 use std::cmp;
+use std::fmt::format;
 use tcod::colors::*;
 use tcod::console::*;
 use tcod::input::{self, Event, Key, Mouse};
@@ -295,6 +296,14 @@ fn pick_item_up(object_id: usize, game: &mut Game, objects: &mut Vec<Object>) {
             .add(format!("You picked up a {}!", item.name), GREEN);
         game.inventory.push(item);
     }
+}
+
+fn drop_item(inventory_id: usize, game: &mut Game, objects: &mut Vec<Object>) {
+    let mut item = game.inventory.remove(inventory_id);
+    item.set_pos(objects[PLAYER].x, objects[PLAYER].y);
+    game.messages
+        .add(format!("You dropped a {}.", item.name), YELLOW);
+    objects.push(item);
 }
 
 /// move by the given amount, if the destination is not blocked
@@ -602,8 +611,7 @@ fn place_objects(room: Rect, map: &Map, objects: &mut Vec<Object>) {
                 }
                 d if d < 0.9 => {
                     // create a fireball scroll (10% chance)
-                    let mut object =
-                        Object::new(x, y, 'x', "scroll of fireball", LIGHT_RED, false);
+                    let mut object = Object::new(x, y, 'x', "scroll of fireball", LIGHT_RED, false);
                     object.item = Some(Item::Fireball);
                     object
                 }
@@ -1161,6 +1169,18 @@ fn handle_keys(tcod: &mut Tcod, game: &mut Game, objects: &mut Vec<Object>) -> P
             );
             if let Some(inventory_index) = inventory_index {
                 use_item(inventory_index, tcod, game, objects);
+            }
+            DidntTakeTurn
+        }
+        (Key { code: Text, .. }, "d", true) => {
+            // show the inventory; if an item is selected, drop it
+            let inventory_index = inventory_menu(
+                &game.inventory,
+                "Press the key next to an item to drop it, or any other to cancel.\n",
+                &mut tcod.root,
+            );
+            if let Some(inventory_index) = inventory_index {
+                drop_item(inventory_index, game, objects);
             }
             DidntTakeTurn
         }

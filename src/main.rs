@@ -1217,25 +1217,7 @@ fn monster_death(monster: &mut Object, game: &mut Game) {
     monster.name = format!("remains of {}", monster.name);
 }
 
-fn main() {
-    tcod::system::set_fps(LIMIT_FPS);
-
-    let root = Root::initializer()
-        .font("arial10x10.png", FontLayout::Tcod)
-        .font_type(FontType::Greyscale)
-        .size(SCREEN_WIDTH, SCREEN_HEIGHT)
-        .title("Roguelike")
-        .init();
-
-    let mut tcod = Tcod {
-        root,
-        con: Offscreen::new(MAP_WIDTH, MAP_HEIGHT),
-        panel: Offscreen::new(SCREEN_WIDTH, PANEL_HEIGHT),
-        fov: FovMap::new(MAP_WIDTH, MAP_HEIGHT),
-        key: Default::default(),
-        mouse: Default::default(),
-    };
-
+fn new_game(tcod: &mut Tcod) -> (Game, Vec<Object>) {
     // create object representing the player
     let mut player = Object::new(0, 0, '@', "player", WHITE, true);
     player.alive = true;
@@ -1256,17 +1238,7 @@ fn main() {
         inventory: vec![],
     };
 
-    // populate the FOV map, according to the generated map
-    for y in 0..MAP_HEIGHT {
-        for x in 0..MAP_WIDTH {
-            tcod.fov.set(
-                x,
-                y,
-                !game.map[x as usize][y as usize].block_sight,
-                !game.map[x as usize][y as usize].blocked,
-            );
-        }
-    }
+    initialize_fov(tcod, &game.map);
 
     // a warm welcoming message!
     game.messages.add(
@@ -1274,6 +1246,24 @@ fn main() {
         RED,
     );
 
+    (game, objects)
+}
+
+fn initialize_fov(tcod: &mut Tcod, map: &Map) {
+    // populate the FOV map, according to the generated map
+    for y in 0..MAP_HEIGHT {
+        for x in 0..MAP_WIDTH {
+            tcod.fov.set(
+                x,
+                y,
+                !map[x as usize][y as usize].block_sight,
+                !map[x as usize][y as usize].blocked,
+            );
+        }
+    }
+}
+
+fn play_game(tcod: &mut Tcod, game: &mut Game, objects: &mut Vec<Object>) {
     // force FOV "recompute" first time through the game loop
     let mut previous_player_position = (-1, -1);
 
@@ -1289,13 +1279,13 @@ fn main() {
 
         // render the screen
         let fov_recompute = previous_player_position != (objects[PLAYER].pos());
-        render_all(&mut tcod, &mut game, &objects, fov_recompute);
+        render_all(tcod, game, &objects, fov_recompute);
 
         tcod.root.flush();
 
         // handle keys and exit game if needed
         previous_player_position = objects[PLAYER].pos();
-        let player_action = handle_keys(&mut tcod, &mut game, &mut objects);
+        let player_action = handle_keys(tcod, game, objects);
         if player_action == PlayerAction::Exit {
             break;
         }
@@ -1304,9 +1294,32 @@ fn main() {
         if objects[PLAYER].alive && player_action != PlayerAction::DidntTakeTurn {
             for id in 0..objects.len() {
                 if objects[id].ai.is_some() {
-                    ai_take_turn(id, &tcod, &mut game, &mut objects);
+                    ai_take_turn(id, tcod, game, objects);
                 }
             }
         }
     }
+}
+
+fn main() {
+    tcod::system::set_fps(LIMIT_FPS);
+
+    let root = Root::initializer()
+        .font("arial10x10.png", FontLayout::Tcod)
+        .font_type(FontType::Greyscale)
+        .size(SCREEN_WIDTH, SCREEN_HEIGHT)
+        .title("Roguelike")
+        .init();
+
+    let mut tcod = Tcod {
+        root,
+        con: Offscreen::new(MAP_WIDTH, MAP_HEIGHT),
+        panel: Offscreen::new(SCREEN_WIDTH, PANEL_HEIGHT),
+        fov: FovMap::new(MAP_WIDTH, MAP_HEIGHT),
+        key: Default::default(),
+        mouse: Default::default(),
+    };
+
+    let (mut game, mut objects) = new_game(&mut tcod);
+    play_game(&mut tcod, &mut game, &mut objects);
 }

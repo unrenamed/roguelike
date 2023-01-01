@@ -29,7 +29,7 @@ const MSG_WIDTH: i32 = SCREEN_WIDTH - BAR_WIDTH - 2;
 const MSG_HEIGHT: usize = PANEL_HEIGHT as usize - 1;
 const INVENTORY_WIDTH: i32 = 50;
 
-//parameters for dungeon generator
+// parameters for dungeon generator
 const ROOM_MAX_SIZE: i32 = 10;
 const ROOM_MIN_SIZE: i32 = 6;
 const MAX_ROOMS: i32 = 30;
@@ -61,6 +61,12 @@ const COLOR_LIGHT_GROUND: Color = Color {
 
 // player will always be the first object
 const PLAYER: usize = 0;
+
+// experience and level-ups
+const LEVEL_UP_BASE: i32 = 200;
+const LEVEL_UP_FACTOR: i32 = 150;
+const LEVEL_SCREEN_WIDTH: i32 = 40;
+const CHARACTER_SCREEN_WIDTH: i32 = 30;
 
 // items/spells/scrolls
 const HEAL_AMOUNT: i32 = 4;
@@ -186,6 +192,7 @@ struct Object {
     ai: Option<Ai>,
     item: Option<Item>,
     always_visible: bool,
+    level: i32,
 }
 
 impl Object {
@@ -202,6 +209,7 @@ impl Object {
             ai: None,
             item: None,
             always_visible: false,
+            level: 1,
         }
     }
 
@@ -232,7 +240,7 @@ impl Object {
         (((x - self.x).pow(2) + (y - self.y).pow(2)) as f32).sqrt()
     }
 
-    pub fn take_damage(&mut self, damage: i32, game: &mut Game) {
+    pub fn take_damage(&mut self, damage: i32, game: &mut Game) -> Option<i32> {
         // apply damage if possible
         if let Some(fighter) = self.fighter.as_mut() {
             if damage > 0 {
@@ -244,8 +252,10 @@ impl Object {
             if fighter.hp <= 0 {
                 self.alive = false;
                 fighter.on_death.callback(self, game);
+                return Some(fighter.xp);
             }
         }
+        None
     }
 
     pub fn attack(&mut self, target: &mut Object, game: &mut Game) {
@@ -260,7 +270,10 @@ impl Object {
                 ),
                 WHITE,
             );
-            target.take_damage(damage, game);
+            if let Some(xp) = target.take_damage(damage, game) {
+                // yield experience to the player
+                self.fighter.as_mut().unwrap().xp += xp;
+            }
         } else {
             game.messages.add(
                 format!(
@@ -362,6 +375,54 @@ fn is_blocked(x: i32, y: i32, map: &Map, objects: &[Object]) -> bool {
         .any(|object| object.blocks && object.pos() == (x, y))
 }
 
+fn level_up(tcod: &mut Tcod, game: &mut Game, objects: &mut [Object]) {
+    let player = &mut objects[PLAYER];
+    let level_up_xp = LEVEL_UP_BASE + player.level * LEVEL_UP_FACTOR;
+    // see if the player's experience is enough to level-up
+    if player.fighter.as_ref().map_or(0, |f| f.xp) >= level_up_xp {
+        // it is! level up
+        player.level += 1;
+        game.messages.add(
+            format!(
+                "Your battle skills grow stronger! You reached level {}!",
+                player.level
+            ),
+            YELLOW,
+        );
+
+        // increase players's stats!
+        let fighter = player.fighter.as_mut().unwrap();
+        let mut choice = None;
+        while choice.is_none() {
+            // keep asking until choice is made
+            choice = menu(
+                "Level up! Choose a stat to raise:\n",
+                &[
+                    format!("Constitution (+20 HP, from {})", fighter.max_hp),
+                    format!("Strength (+1 attack, from {})", fighter.power),
+                    format!("Agility (+1 defense, from {})", fighter.defense),
+                ],
+                LEVEL_SCREEN_WIDTH,
+                &mut tcod.root,
+            )
+        }
+        fighter.xp -= level_up_xp;
+        match choice.unwrap() {
+            0 => {
+                fighter.max_hp += 20;
+                fighter.hp += 20;
+            }
+            1 => {
+                fighter.power += 1;
+            }
+            2 => {
+                fighter.defense += 1;
+            }
+            _ => unreachable!(),
+        }
+    }
+}
+
 // combat-related properties and methods (monster, player, NPC).
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 struct Fighter {
@@ -369,6 +430,7 @@ struct Fighter {
     hp: i32,
     defense: i32,
     power: i32,
+    xp: i32,
     on_death: DeathCallback,
 }
 
@@ -583,6 +645,7 @@ fn place_objects(room: Rect, map: &Map, objects: &mut Vec<Object>) {
                     hp: 10,
                     defense: 0,
                     power: 3,
+                    xp: 35,
                     on_death: DeathCallback::Monster,
                 });
                 orc.ai = Some(Ai::Basic);
@@ -595,6 +658,7 @@ fn place_objects(room: Rect, map: &Map, objects: &mut Vec<Object>) {
                     hp: 16,
                     defense: 1,
                     power: 4,
+                    xp: 100,
                     on_death: DeathCallback::Monster,
                 });
                 troll.ai = Some(Ai::Basic);
@@ -988,7 +1052,9 @@ fn cast_lightning(
             ),
             LIGHTER_BLUE,
         );
-        objects[monster_id].take_damage(LIGHTNING_DAMAGE, game);
+        if let Some(xp) = objects[monster_id].take_damage(LIGHTNING_DAMAGE, game) {
+            objects[PLAYER].fighter.as_mut().unwrap().xp += xp;
+        }
         UseResult::UsedUp
     } else {
         game.messages
@@ -1057,7 +1123,8 @@ fn cast_fireball(
         ORANGE,
     );
 
-    for obj in objects {
+    let mut xp_to_gain = 0;
+    for (id, obj) in objects.iter_mut().enumerate() {
         if obj.distance(x, y) <= FIREBALL_RADIUS as f32 && obj.fighter.is_some() {
             game.messages.add(
                 format!(
@@ -1066,9 +1133,15 @@ fn cast_fireball(
                 ),
                 ORANGE,
             );
-            obj.take_damage(FIREBALL_DAMAGE, game);
+            if let Some(xp) = obj.take_damage(FIREBALL_DAMAGE, game) {
+                if id != PLAYER {
+                    // Don't reward the player for burning themself!
+                    xp_to_gain += xp;
+                }
+            }
         }
     }
+    objects[PLAYER].fighter.as_mut().unwrap().xp += xp_to_gain;
 
     UseResult::UsedUp
 }
@@ -1230,6 +1303,29 @@ fn handle_keys(tcod: &mut Tcod, game: &mut Game, objects: &mut Vec<Object>) -> P
             }
             DidntTakeTurn
         }
+        (Key { code: Text, .. }, "c", true) => {
+            // show character information
+            let player = &objects[PLAYER];
+            let level = player.level;
+            let level_up_xp = LEVEL_UP_BASE + player.level * LEVEL_UP_FACTOR;
+            if let Some(fighter) = player.fighter.as_ref() {
+                let msg = format!(
+                    "Character information
+        
+        Level: {}
+        Experience: {}
+        Experience to level up: {}
+        
+        Maximum HP: {}
+        Attack: {}
+        Defense: {}",
+                    level, fighter.xp, level_up_xp, fighter.max_hp, fighter.power, fighter.defense
+                );
+                msgbox(&msg, CHARACTER_SCREEN_WIDTH, &mut tcod.root);
+            }
+
+            DidntTakeTurn
+        }
         _ => DidntTakeTurn,
     }
 }
@@ -1271,8 +1367,14 @@ fn player_death(player: &mut Object, game: &mut Game) {
 fn monster_death(monster: &mut Object, game: &mut Game) {
     // transform it into a nasty corpse! it doesn't block, can't be
     // attacked and doesn't move
-    game.messages
-        .add(format!("{} is dead!", monster.name), ORANGE);
+    game.messages.add(
+        format!(
+            "{} is dead! You gain {} experience points.",
+            monster.name,
+            monster.fighter.unwrap().xp
+        ),
+        ORANGE,
+    );
     monster.char = '%';
     monster.color = DARK_RED;
     monster.blocks = false;
@@ -1290,6 +1392,7 @@ fn new_game(tcod: &mut Tcod) -> (Game, Vec<Object>) {
         hp: 30,
         defense: 2,
         power: 5,
+        xp: 0,
         on_death: DeathCallback::Player,
     });
 
@@ -1350,6 +1453,9 @@ fn play_game(tcod: &mut Tcod, game: &mut Game, objects: &mut Vec<Object>) {
         render_all(tcod, game, &objects, fov_recompute);
 
         tcod.root.flush();
+
+        // level up if needed
+        level_up(tcod, game, objects);
 
         // handle keys and exit game if needed
         previous_player_position = objects[PLAYER].pos();

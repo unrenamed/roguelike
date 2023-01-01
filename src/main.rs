@@ -108,6 +108,7 @@ struct Game {
     map: Map,
     messages: Messages,
     inventory: Vec<Object>,
+    dungeon_level: u32,
 }
 
 /// A tile of the map and its properties
@@ -184,6 +185,7 @@ struct Object {
     fighter: Option<Fighter>,
     ai: Option<Ai>,
     item: Option<Item>,
+    always_visible: bool,
 }
 
 impl Object {
@@ -199,6 +201,7 @@ impl Object {
             fighter: None,
             ai: None,
             item: None,
+            always_visible: false,
         }
     }
 
@@ -491,6 +494,11 @@ fn make_map(objects: &mut Vec<Object>) -> Map {
     // fill map with "blocked" tiles
     let mut map = vec![vec![Tile::wall(); MAP_HEIGHT as usize]; MAP_WIDTH as usize];
 
+    // Player is the first element, remove everything else.
+    // NOTE: works only when the player is the first object!
+    assert_eq!(&objects[PLAYER] as *const _, &objects[0] as *const _);
+    objects.truncate(1);
+
     let mut rooms = vec![];
 
     for _ in 0..MAX_ROOMS {
@@ -546,6 +554,11 @@ fn make_map(objects: &mut Vec<Object>) -> Map {
             rooms.push(new_room);
         }
     }
+
+    let (last_room_x, last_room_y) = rooms[rooms.len() - 1].center();
+    let mut stairs = Object::new(last_room_x, last_room_y, '<', "stairs", WHITE, false);
+    stairs.always_visible = true;
+    objects.push(stairs);
 
     map
 }
@@ -603,7 +616,7 @@ fn place_objects(room: Rect, map: &Map, objects: &mut Vec<Object>) {
         // only place it if the tile is not blocked
         if !is_blocked(x, y, map, objects) {
             let dice = rand::random::<f32>();
-            let item = match dice {
+            let mut item = match dice {
                 d if d < 0.7 => {
                     // create a healing potion (70% chance)
                     let mut object = Object::new(x, y, '!', "healing potion", VIOLET, false);
@@ -632,6 +645,7 @@ fn place_objects(room: Rect, map: &Map, objects: &mut Vec<Object>) {
                 }
             };
 
+            item.always_visible = true;
             objects.push(item);
         }
     }
@@ -723,7 +737,10 @@ fn render_all(tcod: &mut Tcod, game: &mut Game, objects: &[Object], fov_recomput
 
     let mut to_draw: Vec<_> = objects
         .iter()
-        .filter(|o| tcod.fov.is_in_fov(o.x, o.y))
+        .filter(|o| {
+            tcod.fov.is_in_fov(o.x, o.y)
+                || (o.always_visible && game.map[o.x as usize][o.y as usize].explored)
+        })
         .collect();
     // sort so that non-blocking objects come first
     to_draw.sort_by(|o1, o2| o1.blocks.cmp(&o2.blocks));
@@ -772,6 +789,14 @@ fn render_all(tcod: &mut Tcod, game: &mut Game, objects: &[Object], fov_recomput
         max_hp,
         LIGHT_RED,
         DARKER_RED,
+    );
+
+    tcod.panel.print_ex(
+        1,
+        3,
+        BackgroundFlag::None,
+        TextAlignment::Left,
+        format!("Dungeon level: {}", game.dungeon_level),
     );
 
     // display names of objects under the mouse
@@ -1196,8 +1221,35 @@ fn handle_keys(tcod: &mut Tcod, game: &mut Game, objects: &mut Vec<Object>) -> P
             }
             DidntTakeTurn
         }
+        (Key { code: Text, .. }, "<", true) => {
+            let player_on_stairs = objects
+                .iter()
+                .any(|object| object.pos() == objects[PLAYER].pos() && object.name == "stairs");
+            if player_on_stairs {
+                next_level(tcod, game, objects);
+            }
+            DidntTakeTurn
+        }
         _ => DidntTakeTurn,
     }
+}
+
+fn next_level(tcod: &mut Tcod, game: &mut Game, objects: &mut Vec<Object>) {
+    game.messages.add(
+        "You take a moment to rest, and recover your strength.",
+        VIOLET,
+    );
+    let heal_hp = objects[PLAYER].fighter.map_or(0, |f| f.max_hp / 2);
+    objects[PLAYER].heal(heal_hp);
+
+    game.messages.add(
+        "After a rare moment of peace, you descend deeper into \
+         the heart of the dungeon...",
+        RED,
+    );
+    game.dungeon_level += 1;
+    game.map = make_map(objects);
+    initialize_fov(tcod, &game.map);
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -1248,6 +1300,7 @@ fn new_game(tcod: &mut Tcod) -> (Game, Vec<Object>) {
         map: make_map(&mut objects),
         messages: Messages::new(),
         inventory: vec![],
+        dungeon_level: 1,
     };
 
     initialize_fov(tcod, &game.map);

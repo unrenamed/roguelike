@@ -1,5 +1,6 @@
 use rand::Rng;
 
+use rand::distributions::{IndependentSample, Weighted, WeightedChoice};
 use serde::{Deserialize, Serialize};
 
 use std::cmp;
@@ -626,6 +627,19 @@ fn make_map(objects: &mut Vec<Object>) -> Map {
 }
 
 fn place_objects(room: Rect, map: &Map, objects: &mut Vec<Object>) {
+    // monster random table
+    let monster_chances = &mut [
+        Weighted {
+            weight: 80,
+            item: "orc",
+        },
+        Weighted {
+            weight: 20,
+            item: "troll",
+        },
+    ];
+    let monster_choice = WeightedChoice::new(monster_chances);
+
     // choose random number of monsters
     let num_monsters = rand::thread_rng().gen_range(0, MAX_ROOM_MONSTERS + 1);
 
@@ -636,38 +650,62 @@ fn place_objects(room: Rect, map: &Map, objects: &mut Vec<Object>) {
 
         // only place it if the tile is not blocked
         if !is_blocked(x, y, map, objects) {
-            let mut monster = if rand::random::<f32>() < 0.8 {
-                // 80% chance of getting an orc
-                // create an orc
-                let mut orc = Object::new(x, y, 'o', "orc", DESATURATED_GREEN, true);
-                orc.fighter = Some(Fighter {
-                    max_hp: 10,
-                    hp: 10,
-                    defense: 0,
-                    power: 3,
-                    xp: 35,
-                    on_death: DeathCallback::Monster,
-                });
-                orc.ai = Some(Ai::Basic);
-                orc
-            } else {
-                // create a troll
-                let mut troll = Object::new(x, y, 'T', "troll", DARKER_GREEN, true);
-                troll.fighter = Some(Fighter {
-                    max_hp: 16,
-                    hp: 16,
-                    defense: 1,
-                    power: 4,
-                    xp: 100,
-                    on_death: DeathCallback::Monster,
-                });
-                troll.ai = Some(Ai::Basic);
-                troll
+            let mut monster = match monster_choice.ind_sample(&mut rand::thread_rng()) {
+                "orc" => {
+                    // create an orc
+                    let mut orc = Object::new(x, y, 'o', "orc", DESATURATED_GREEN, true);
+                    orc.fighter = Some(Fighter {
+                        max_hp: 10,
+                        hp: 10,
+                        defense: 0,
+                        power: 3,
+                        xp: 35,
+                        on_death: DeathCallback::Monster,
+                    });
+                    orc.ai = Some(Ai::Basic);
+                    orc
+                }
+                "troll" => {
+                    // create a troll
+                    let mut troll = Object::new(x, y, 'T', "troll", DARKER_GREEN, true);
+                    troll.fighter = Some(Fighter {
+                        max_hp: 16,
+                        hp: 16,
+                        defense: 1,
+                        power: 4,
+                        xp: 100,
+                        on_death: DeathCallback::Monster,
+                    });
+                    troll.ai = Some(Ai::Basic);
+                    troll
+                }
+                _ => unreachable!(),
             };
             monster.alive = true;
             objects.push(monster);
         }
     }
+
+    // item random table
+    let item_chances = &mut [
+        Weighted {
+            weight: 70,
+            item: Item::Heal,
+        },
+        Weighted {
+            weight: 10,
+            item: Item::Lightning,
+        },
+        Weighted {
+            weight: 10,
+            item: Item::Fireball,
+        },
+        Weighted {
+            weight: 10,
+            item: Item::Confuse,
+        },
+    ];
+    let item_choice = WeightedChoice::new(item_chances);
 
     // choose random number of items
     let num_items = rand::thread_rng().gen_range(0, MAX_ROOM_ITEMS + 1);
@@ -679,28 +717,27 @@ fn place_objects(room: Rect, map: &Map, objects: &mut Vec<Object>) {
 
         // only place it if the tile is not blocked
         if !is_blocked(x, y, map, objects) {
-            let dice = rand::random::<f32>();
-            let mut item = match dice {
-                d if d < 0.7 => {
+            let mut item = match item_choice.ind_sample(&mut rand::thread_rng()) {
+                Item::Heal => {
                     // create a healing potion (70% chance)
                     let mut object = Object::new(x, y, '!', "healing potion", VIOLET, false);
                     object.item = Some(Item::Heal);
                     object
                 }
-                d if d < 0.8 => {
+                Item::Lightning => {
                     // create a lightning bolt scroll (10% chance)
                     let mut object =
                         Object::new(x, y, 'z', "scroll of lightning bolt", LIGHT_YELLOW, false);
                     object.item = Some(Item::Lightning);
                     object
                 }
-                d if d < 0.9 => {
+                Item::Fireball => {
                     // create a fireball scroll (10% chance)
                     let mut object = Object::new(x, y, 'x', "scroll of fireball", LIGHT_RED, false);
                     object.item = Some(Item::Fireball);
                     object
                 }
-                _ => {
+                Item::Confuse => {
                     // create a confuse scroll (10% chance)
                     let mut object =
                         Object::new(x, y, '?', "scroll of confusion", LIGHT_BLUE, false);
